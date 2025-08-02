@@ -1,16 +1,33 @@
 package main
 
 import (
-	"fmt"
-	"os"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"runtime"
 	"strings"
+	"time"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	gowiki "github.com/trietmn/go-wiki"
+
+	//SSH Wish imports
+	"context"
+	"errors"
+	"net"
+	"syscall"
+
+	"github.com/charmbracelet/log"
+	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/activeterm"
+	"github.com/charmbracelet/wish/bubbletea"
+	"github.com/charmbracelet/wish/logging"
 )
 
 type model struct {
@@ -30,13 +47,64 @@ type model struct {
 
 var headerstyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
+const (
+	host = "localhost"
+	port = "2222"
+)
+
+var isServer = true // Set to true to enable the server, false to disable it
+
+func startServer() {
+	s, err := wish.NewServer(
+		wish.WithAddress(net.JoinHostPort(host, port)),
+		wish.WithHostKeyPath(".ssh/id_ed25519"),
+		wish.WithMiddleware(
+			bubbletea.Middleware(teaHandler),
+			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
+			logging.Middleware(),
+		),
+	)
+	if err != nil {
+		log.Error("Could not start server", "error", err)
+	}
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	log.Info("Starting SSH server", "host", host, "port", port)
+	go func() {
+		if err = s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+			log.Error("Could not start server", "error", err)
+			done <- nil
+		}
+	}()
+
+	<-done
+	log.Info("Stopping SSH server")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer func() { cancel() }()
+	if err := s.Shutdown(ctx); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+		log.Error("Could not stop server", "error", err)
+	}
+}
+
+func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+
+	// Use the Bubble Tea renderer for SSH sessions
+	// renderer := bubbletea.MakeRenderer(s) // Not used, can be added for advanced styling
+
+	// Pass the renderer to the model if you want to use it for styling (optional)
+	m := initialModel()
+	// Optionally, you could set m.ready = true and m.showViewport = false to always start in search mode
+	return m, []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+}
+
 func initialModel() model {
 	ti := textinput.New()
 	ti.Placeholder = ""
 	ti.Focus()
 	ti.CharLimit = 156
-	ti.Width = 20
-	vp := viewport.New(80, 24) // Default size, will be updated on WindowSizeMsg
+	ti.Width = 60
+	vp := viewport.New(80, 24)
 	return model{
 		input:        ti,
 		viewport:     vp,
@@ -44,6 +112,7 @@ func initialModel() model {
 		directory:    ".",
 		text:         "nothing yet...",
 		historyIndex: -1,
+		clihistory:   []string{"Welcome to Fred's Portfolio CLI! Type 'help' for commands."},
 	}
 }
 
@@ -59,14 +128,18 @@ func (m model) Init() tea.Cmd {
 }
 
 func main() {
-	p := tea.NewProgram(
-		initialModel(),
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Alas, there's been an error: %v", err)
-		os.Exit(1)
+	if isServer {
+		startServer()
+	} else {
+		p := tea.NewProgram(
+			initialModel(),
+			tea.WithAltScreen(),
+			tea.WithMouseCellMotion(),
+		)
+		if _, err := p.Run(); err != nil {
+			fmt.Printf("Alas, there's been an error: %v", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -152,7 +225,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 
 			} else if inputValue == "help" {
-				m.text = "Just get good honestly"
+				m.text = `Available Commands:
+===================
+
+Navigation:
+  pwd          - Show current directory
+  ls           - List files and directories
+  cd <dir>     - Change directory (use '..' to go up)
+  cat <file>   - View file contents in pager mode
+
+System Info:
+  whoami       - Show current user
+  date         - Show current date
+  version      - Show CLI version and build info
+  neofetch     - Display system information with ASCII art
+
+Portfolio:
+  skills       - Show my technical skills
+  contact      - Show contact information
+
+Utilities:
+  echo <text>  - Echo back the provided text
+  joke         - Get a random dad joke
+  wiki <term>  - Search Wikipedia for a term
+  clear        - Clear the terminal output
+  help         - Show this help message
+  exit         - Exit the CLI
+
+Navigation Tips:
+  - Use up/down arrows to browse command history
+  - Press 'q' or 'esc' to exit file viewer
+  - Use 'cd ..' to go to parent directory
+
+Examples:
+  cd Portfolio     - Navigate to Portfolio directory
+  cat README.md    - View README file
+  wiki golang      - Search Wikipedia for 'golang'
+  echo Hello!      - Display 'Hello!'`
 				m.input.Reset()
 			} else if inputValue == "clear" {
 				//m.history = []string{}    // Clear history
@@ -189,13 +298,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.text = fmt.Sprintf("Error fetching joke: %v", err)
 				} else {
 					defer resp.Body.Close()
-					
+
 					var jokeData struct {
 						ID     string `json:"id"`
 						Joke   string `json:"joke"`
 						Status int    `json:"status"`
 					}
-					
+
 					if err := json.NewDecoder(resp.Body).Decode(&jokeData); err != nil {
 						m.text = fmt.Sprintf("Error parsing joke: %v", err)
 					} else {
@@ -221,15 +330,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.text = "\n" + search_result
 					}
 				}
+			} else if inputValue == "pwd" {
+				m.text = "Current directory: " + m.directory
+				m.input.Reset()
+			} else if inputValue == "exit" {
+				return m, tea.Quit
+			} else if inputValue == "whoami" {
+				m.text = "Current user: guest"
+				m.input.Reset()
+			} else if inputValue == "date" {
+				m.text = "Current date: " + time.Now().Format("2006-01-02")
+				m.input.Reset()
+			} else if len(inputValue) >= 5 && inputValue[:5] == "echo " {
+				m.text = "Echoing: " + inputValue[5:]
+				m.input.Reset()
+			} else if inputValue == "neofetch" {
+				style := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+				neofetchStyle := style
+				m.text = neofetchStyle.Render(fmt.Sprintf(`
+				.88888888:.              guest@fred-cli
+			   88888888.88888.           -----------------
+			 .8888888888888888.          OS: Fred's Portfolio CLI
+			 888888888888888888          Kernel: Go Runtime
+			 88' _`+"`"+`88'_  `+"`"+`88888          Uptime: Running since startup
+			 88 88 88 88  88888          Shell: Go CLI v1.0
+			 88_88_::_88_:88888          Resolution: Terminal Based
+			 88:::,::,:::::8888          Terminal: Bubbles Tea
+			 88`+"`"+`:::::::::`+"`"+`8888           CPU: %s
+			.88  `+"`"+`::::`+"`"+`    8:88.         Memory: Efficient Go runtime
+		   8888            `+"`"+`8:888.       Language: Go
+		 .8888`+"`"+`             `+"`"+`888888.     Platform: %s
+		.8888:..  .::.  ...:`+"`"+`8888888:.   
+	   .8888.`+"`"+`     :`+"`"+`     `+"`"+`::`+"`"+`88:88888  
+	  .8888        `+"`"+`         `+"`"+`.888:8888. 
+	 888:8         .           888:88888 
+   .888:88        .:           888:88888:
+   8888888.       ::           88:888888 
+   `+"`"+`.::.888.      ::          .88888888  
+  .::::::.888.    ::         :::`+"`"+`8888`+"`"+`.  :
+ ::::::::::.888   `+"`"+`         .::::::::::::
+ ::::::::::::.8    `+"`"+`      .:8::::::::::::.
+.::::::::::::::.        .:888:::::::::::::
+:::::::::::::::88:.__..:88888::::::::::::`+"`"+`
+ `+"`"+``+"`"+`.:::::::::::88888888888.88:::::::::  
+	   `+"`"+``+"`"+`:::_:`+"`"+` -- `+"`"+``+"`"+` -`+"`"+`-`+"`"+` `+"`"+``+"`"+`:_::::      
+`, runtime.GOARCH, runtime.GOOS))
+				m.input.Reset()
+			} else if inputValue == "version" {
+				m.text += " verson 1.0.0, built with Go " + runtime.Version() + " on " + runtime.GOOS + "/" + runtime.GOARCH
+				m.input.Reset()
+			} else if inputValue == "skills" {
+				m.text = `
+Skills:
+================
+• Go Programming 
+• Terminal/CLI Development
+• Web Development 
+• Game Development
+• GDscript (Godot programming language)
+• LLMS (Large Language Models)
+`
+				m.input.Reset()
+			} else if inputValue == "contact" {
+				m.text = "You can find me on:\n- GitHub:   github.com/ItsHotdogFred\n- Itch.io:  itshotdogfred.itch.io\n- Email:    cli@itsfred.dev"
+				m.input.Reset()
 			} else {
 				m.text += " is not a valid command, try running help for commands"
-
-
-
-				// Pressing U for some reason takes the user to the top of the viewport
-
-
-
 				m.input.Reset()
 			}
 			// Only append to clihistory if not just cleared
@@ -325,7 +491,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Prevent viewport from moving with up/down keys by filtering them out
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
-		case "up", "down", "ctrl+p", "ctrl+n":
+		case "up", "down", "ctrl+p", "ctrl+n", "u", "k", "b":
 			// Don't update viewport for up/down keys
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
