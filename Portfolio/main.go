@@ -1,33 +1,30 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	gowiki "github.com/trietmn/go-wiki"
-
-	//SSH Wish imports
-	"context"
-	"errors"
-	"net"
-	"syscall"
-
 	"github.com/charmbracelet/log"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	gowiki "github.com/trietmn/go-wiki"
 )
 
 type model struct {
@@ -43,6 +40,7 @@ type model struct {
 	fileViewMode bool           // true if viewing a file
 	fileViewport viewport.Model // dedicated viewport for file viewing
 	fileContent  string         // content of the file being viewed
+	tabmode      bool           // true if in tab mode
 }
 
 var headerstyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -52,7 +50,7 @@ const (
 	port = "2222"
 )
 
-var isServer = true // Set to true to enable the server, false to disable it
+const isServer = true // Set to true to enable the server, false to disable it
 
 func startServer() {
 	s, err := wish.NewServer(
@@ -88,13 +86,7 @@ func startServer() {
 }
 
 func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
-
-	// Use the Bubble Tea renderer for SSH sessions
-	// renderer := bubbletea.MakeRenderer(s) // Not used, can be added for advanced styling
-
-	// Pass the renderer to the model if you want to use it for styling (optional)
 	m := initialModel()
-	// Optionally, you could set m.ready = true and m.showViewport = false to always start in search mode
 	return m, []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
 }
 
@@ -104,7 +96,7 @@ func initialModel() model {
 	ti.Focus()
 	ti.CharLimit = 156
 	ti.Width = 60
-	vp := viewport.New(80, 24)
+	vp := viewport.New(0, 0)
 	return model{
 		input:        ti,
 		viewport:     vp,
@@ -112,19 +104,13 @@ func initialModel() model {
 		directory:    ".",
 		text:         "nothing yet...",
 		historyIndex: -1,
-		clihistory:   []string{"Welcome to Fred's Portfolio CLI! Type 'help' for commands."},
+		clihistory:   []string{headerView(), "Welcome to Fred's Portfolio CLI!\n\nNavigation:\n• Use scroll wheel or arrow keys (when tab mode is active)\n• Press 'tab' to toggle viewport/history navigation mode\n• Type 'help' to see all available commands\n\nGet started with 'ls' to explore or 'help' for guidance."},
 	}
 }
 
 // Init implements the tea.Model interface.
 func (m model) Init() tea.Cmd {
-	// Force a synthetic WindowSizeMsg to initialize viewport size
-	return tea.Batch(
-		textinput.Blink,
-		func() tea.Msg {
-			return tea.WindowSizeMsg{Width: 80, Height: 24}
-		},
-	)
+	return textinput.Blink
 }
 
 func main() {
@@ -145,7 +131,8 @@ func main() {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
-		cmd tea.Cmd
+		cmd  tea.Cmd
+		cmds []tea.Cmd
 	)
 	// Handle file view mode
 	if m.fileViewMode {
@@ -175,7 +162,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Is it a key press?
 	case tea.KeyMsg:
 
-		// Cool, what was the actual key pressed?
 		switch msg.String() {
 
 		// These keys should exit the program.
@@ -192,8 +178,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.text != "" && m.text != "nothing yet..." {
 					dirToAdd := m.text[3:] // get everything after 'cd '
 					if dirToAdd == ".." {
-						// If the command is 'cd ..', go up one directory
-						// We need to remove the last directory from the current path
 						parts := strings.Split(m.directory, "/")
 						if len(parts) > 1 {
 							m.directory = strings.Join(parts[:len(parts)-1], "/")
@@ -201,7 +185,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.directory = m.startingpath
 						}
 					} else {
-						if validatePath(m.directory + "/" + dirToAdd) {
+						// Check if trying to access a hidden directory
+						if strings.HasPrefix(dirToAdd, ".") {
+							m.text = "Access denied: Hidden directories are not accessible"
+						} else if validatePath(m.directory + "/" + dirToAdd) {
 							m.directory = m.directory + "/" + dirToAdd
 						} else {
 							m.text = "Invalid directory: " + dirToAdd
@@ -219,7 +206,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				s += "\nName\n------\n"
 				for _, entry := range entries {
-					s += fmt.Sprintf("%s\n", entry.Name())
+					// Skip hidden files/folders (those starting with .)
+					if !strings.HasPrefix(entry.Name(), ".") {
+						s += fmt.Sprintf("%s\n", entry.Name())
+					}
 				}
 				m.text = s
 				m.input.Reset()
@@ -229,28 +219,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 ===================
 
 Navigation:
-  pwd          - Show current directory
-  ls           - List files and directories
-  cd <dir>     - Change directory (use '..' to go up)
-  cat <file>   - View file contents in pager mode
+  pwd        - Show current directory
+  ls         - List files and directories
+  cd <dir>   - Change directory (use '..' to go up)
+  cat <file> - View file contents in pager mode
 
 System Info:
-  whoami       - Show current user
-  date         - Show current date
-  version      - Show CLI version and build info
-  neofetch     - Display system information with ASCII art
+  whoami     - Show current user
+  date       - Show current date
+  version    - Show CLI version and build info
+  neofetch   - Display system information with ASCII art
 
 Portfolio:
-  skills       - Show my technical skills
-  contact      - Show contact information
+  skills     - Show my technical skills
+  contact    - Show contact information
 
 Utilities:
-  echo <text>  - Echo back the provided text
-  joke         - Get a random dad joke
-  wiki <term>  - Search Wikipedia for a term
-  clear        - Clear the terminal output
-  help         - Show this help message
-  exit         - Exit the CLI
+  echo <text> - Echo back the provided text
+  joke        - Get a random dad joke
+  wiki <term> - Search Wikipedia for a term
+  clear       - Clear the terminal output
+  help        - Show this help message
+  exit        - Exit the CLI
 
 Navigation Tips:
   - Use up/down arrows to browse command history
@@ -258,20 +248,25 @@ Navigation Tips:
   - Use 'cd ..' to go to parent directory
 
 Examples:
-  cd Portfolio     - Navigate to Portfolio directory
-  cat README.md    - View README file
-  wiki golang      - Search Wikipedia for 'golang'
-  echo Hello!      - Display 'Hello!'`
+  cd Portfolio   - Navigate to Portfolio directory
+  cat README.md  - View README file
+  wiki golang    - Search Wikipedia for 'golang'
+  echo Hello!    - Display 'Hello!'`
 				m.input.Reset()
 			} else if inputValue == "clear" {
-				//m.history = []string{}    // Clear history
-				m.clihistory = []string{} // Clear terminal output
-				m.viewport.SetContent("") // Clear viewport content
+				m.clihistory = []string{headerView()} // Reset history but keep header
 				m.input.Reset()
 				// Don't append 'clear' to clihistory
 				break
 			} else if len(inputValue) >= 4 && inputValue[:4] == "cat " {
-				content, err := os.ReadFile(m.directory + "/" + inputValue[4:])
+				filename := inputValue[4:]
+				// Check if trying to access a hidden file
+				if strings.HasPrefix(filename, ".") {
+					m.text = "Access denied: Hidden files are not accessible"
+					m.input.Reset()
+					break
+				}
+				content, err := os.ReadFile(m.directory + "/" + filename)
 				if err != nil {
 					m.text = fmt.Sprintf("Error reading file: %v", err)
 					m.input.Reset()
@@ -317,7 +312,7 @@ Examples:
 
 			} else if len(inputValue) >= 5 && inputValue[:5] == "wiki " {
 				m.input.Reset()
-				query := inputValue[4:] // Get everything after 'wiki '
+				query := inputValue[5:] // Get everything after 'wiki '
 				if query == "" {
 					m.text = "Please provide a search term."
 				} else {
@@ -345,21 +340,21 @@ Examples:
 				m.text = "Echoing: " + inputValue[5:]
 				m.input.Reset()
 			} else if inputValue == "neofetch" {
-				style := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+				style := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 				neofetchStyle := style
 				m.text = neofetchStyle.Render(fmt.Sprintf(`
 				.88888888:.              guest@fred-cli
 			   88888888.88888.           -----------------
-			 .8888888888888888.          OS: Fred's Portfolio CLI
-			 888888888888888888          Kernel: Go Runtime
-			 88' _`+"`"+`88'_  `+"`"+`88888          Uptime: Running since startup
-			 88 88 88 88  88888          Shell: Go CLI v1.0
-			 88_88_::_88_:88888          Resolution: Terminal Based
-			 88:::,::,:::::8888          Terminal: Bubbles Tea
-			 88`+"`"+`:::::::::`+"`"+`8888           CPU: %s
-			.88  `+"`"+`::::`+"`"+`    8:88.         Memory: Efficient Go runtime
-		   8888            `+"`"+`8:888.       Language: Go
-		 .8888`+"`"+`             `+"`"+`888888.     Platform: %s
+			 .8888888888888888.         OS: Fred's Portfolio CLI
+			 888888888888888888         Kernel: Go Runtime
+			 88' _`+"`"+`88'_  `+"`"+`88888         Uptime: Running since startup
+			 88 88 88 88  88888         Shell: Go CLI v1.0
+			 88_88_::_88_:88888         Resolution: Terminal Based
+			 88:::,::,:::::8888         Terminal: Bubbles Tea
+			 88`+"`"+`:::::::::`+"`"+`8888          CPU: %s
+			.88  `+"`"+`::::`+"`"+`    8:88.        Memory: Efficient Go runtime
+		   8888            `+"`"+`8:888.      Language: Go
+		 .8888`+"`"+`             `+"`"+`888888.    Platform: %s
 		.8888:..  .::.  ...:`+"`"+`8888888:.   
 	   .8888.`+"`"+`     :`+"`"+`     `+"`"+`::`+"`"+`88:88888  
 	  .8888        `+"`"+`         `+"`"+`.888:8888. 
@@ -383,9 +378,9 @@ Examples:
 				m.text = `
 Skills:
 ================
-• Go Programming 
+• Go Programming
 • Terminal/CLI Development
-• Web Development 
+• Web Development
 • Game Development
 • GDscript (Godot programming language)
 • LLMS (Large Language Models)
@@ -403,106 +398,91 @@ Skills:
 				m.clihistory = append(m.clihistory, m.text)
 			}
 
-			// Update viewport content and scroll to bottom
-			if m.ready {
-				// displayDir := m.directory
-				// if displayDir == "." || displayDir == "" {
-				// 	displayDir = "~"
-				// } else if strings.HasPrefix(displayDir, "./") {
-				// 	displayDir = "~" + displayDir[1:]
-				// }
+		case "tab":
+			// Toggle tab mode
+			m.tabmode = !m.tabmode
 
-				var contentBuilder strings.Builder
-				contentBuilder.WriteString(m.headerView())
-
-				for i := 0; i < len(m.clihistory); i++ {
-					contentBuilder.WriteString(m.clihistory[i])
-					contentBuilder.WriteString("\n")
-				}
-
-				contentBuilder.WriteString("\n")
-				// Remove this line from viewport content:
-				// contentBuilder.WriteString("guest@fred:" + displayDir + "$\n")
-				// Remove: contentBuilder.WriteString(m.input.View())
-				// Remove: contentBuilder.WriteString("\n")
-
-				m.viewport.SetContent(contentBuilder.String())
-				m.viewport, _ = m.viewport.Update(msg)
-				m.viewport.SetYOffset(1 << 16)
-			}
+		// if Tab mode is enabled, arrow keys should move viewport
 
 		case "up", "ctrl+p":
-			// Only allow input history navigation, do not move viewport
-			if len(m.history) > 0 {
-				if m.historyIndex == -1 {
-					m.historyIndex = 0
-				} else if m.historyIndex < len(m.history)-1 {
-					m.historyIndex++
+			if !m.tabmode {
+				if len(m.history) > 0 {
+					if m.historyIndex == -1 {
+						m.historyIndex = 0
+					} else if m.historyIndex < len(m.history)-1 {
+						m.historyIndex++
+					}
+					m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
 				}
-				m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
+				return m, nil
 			}
 		case "down", "ctrl+n":
 			// Only allow input history navigation, do not move viewport
-			if len(m.history) > 0 {
-				if m.historyIndex > 0 {
-					m.historyIndex--
+			if !m.tabmode {
+				if len(m.history) > 0 {
+					if m.historyIndex > 0 {
+						m.historyIndex--
+					}
 					m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
 				} else if m.historyIndex == 0 {
 					m.historyIndex = -1
 					m.input.SetValue("")
 				}
+				return m, nil
 			}
+
 		}
 	case tea.WindowSizeMsg:
-		headerHeight := lipgloss.Height(m.headerView())
-		footerHeight := lipgloss.Height(m.footerView())
-		verticalMarginHeight := headerHeight + footerHeight
+		// The prompt line acts as the footer for the main view.
+		// We account for the prompt line itself plus a newline.
+		promptHeight := 2
+		verticalMarginHeight := promptHeight
 
-		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - verticalMarginHeight
-		m.viewport.YPosition = headerHeight
-		m.ready = true
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
+			m.viewport.YPosition = 0 // Viewport starts at the top
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height - verticalMarginHeight
+		}
 	}
 
-	if m.ready {
-		displayDir := m.directory
-		if displayDir == "." || displayDir == "" {
-			displayDir = "~"
-		}
-
-		var contentBuilder strings.Builder
-		contentBuilder.WriteString(m.headerView())
-
-		for i := 0; i < len(m.clihistory); i++ {
-			contentBuilder.WriteString(m.clihistory[i])
-			contentBuilder.WriteString("\n")
-		}
-
+	// This block now correctly handles setting the viewport content
+	// after any command is run or the window is resized.
+	var contentBuilder strings.Builder
+	for i := 0; i < len(m.clihistory); i++ {
+		contentBuilder.WriteString(m.clihistory[i])
 		contentBuilder.WriteString("\n")
+	}
+	m.viewport.SetContent(contentBuilder.String())
 
-		m.viewport.SetContent(contentBuilder.String())
-		// (No auto-scroll here)
-	} else {
-		m.viewport.SetContent("Initializing terminal size...")
+	// After an enter press, scroll to the bottom of the viewport
+	if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "enter" {
+		m.viewport.GotoBottom()
 	}
 
-	// Only update viewport for non-arrow key events (scroll wheel, etc.)
-	// Arrow keys are handled above for input history only
-	// Prevent viewport from moving with up/down keys by filtering them out
+	// Handle input and viewport updates
+	// First check if it's a key message that should not move the viewport
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
-		case "up", "down", "ctrl+p", "ctrl+n", "u", "k", "b":
-			// Don't update viewport for up/down keys
+		case "ctrl+p", "ctrl+n", "u", "k", "b", "d", "f", "j":
+			// Don't update viewport for these keys, only update input
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
 		}
 	}
-	m.viewport, _ = m.viewport.Update(msg)
+
 	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	cmds = append(cmds, cmd)
+
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
 }
 
-func (m model) headerView() string {
+func headerView() string {
 	header := `
 ███████╗██████╗ ███████╗██████╗      ██████╗██╗     ██╗
 ██╔════╝██╔══██╗██╔════╝██╔══██╗    ██╔════╝██║     ██║
@@ -510,17 +490,9 @@ func (m model) headerView() string {
 ██╔══╝  ██╔══██╗██╔══╝  ██║  ██║    ██║     ██║     ██║
 ██║     ██║  ██║███████╗██████╔╝    ╚██████╗███████╗██║
 ╚═╝     ╚═╝  ╚═╝╚══════╝╚═════╝      ╚═════╝╚══════╝╚═╝
-	   `
-	title := headerstyle.Render(header) + "\n"
+        `
+	title := headerstyle.Render(header)
 	return title
-}
-
-// footerView returns a simple footer string.
-func (m model) footerView() string {
-	// info := infoStyle.Render(fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100))
-	// line := strings.Repeat("─", max(0, m.viewport.Width-lipgloss.Width(info)))
-	// return lipgloss.JoinHorizontal(lipgloss.Center, line, info)
-	return "\n"
 }
 
 func (m model) View() string {
@@ -533,11 +505,12 @@ func (m model) View() string {
 	if !m.ready {
 		return "Initializing terminal size..."
 	}
-	// Show viewport (history/output) and input field at the bottom
 	// Add lipgloss color to "guest@fred"
 	promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	prompt := promptStyle.Render("guest@fred:")
-	return m.viewport.View() + "\n" + prompt + (func() string {
+
+	// Construct the prompt line which now acts as our footer
+	promptLine := prompt + (func() string {
 		displayDir := m.directory
 		if displayDir == "." || displayDir == "" {
 			return "~"
@@ -545,7 +518,13 @@ func (m model) View() string {
 			return "~" + displayDir[1:]
 		}
 		return displayDir
-	}()) + "$" + m.input.View() + "\n"
+	}()) + "$" + m.input.View()
+
+	// Assemble the final view correctly. The header is now inside the viewport.
+	return fmt.Sprintf("%s\n%s",
+		m.viewport.View(),
+		promptLine,
+	)
 }
 
 // validatePath checks if the given path exists and is a directory.
@@ -583,14 +562,3 @@ func max(a, b int) int {
 	}
 	return b
 }
-
-// Index is skipping the first one in the history
-// ls isn't being recoreded in history
-
-//
-//
-//
-//	Add arrow key handling for viewport scrolling but make it so you need to press tab to switch between input history and viewport scrolling
-//	See if the Text Area in the bubbles library if writing can be disabed https://github.com/charmbracelet/bubbles
-//
-//
