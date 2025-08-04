@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	"github.com/mdp/qrterminal/v3"
 	gowiki "github.com/trietmn/go-wiki"
 )
 
@@ -46,7 +48,7 @@ type model struct {
 var headerstyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 const (
-	host = "localhost"
+	host = ""
 	port = "2222"
 )
 
@@ -233,7 +235,8 @@ System Info:
 Portfolio:
   skills     - Show my technical skills
   contact    - Show contact information
-
+  qr <text>  - Generate QR code for text
+  coinflip   - Flip a coin (heads or tails)
 Utilities:
   echo <text> - Echo back the provided text
   joke        - Get a random dad joke
@@ -388,6 +391,53 @@ Skills:
 				m.input.Reset()
 			} else if inputValue == "contact" {
 				m.text = "You can find me on:\n- GitHub:   github.com/ItsHotdogFred\n- Itch.io:  itshotdogfred.itch.io\n- Email:    cli@itsfred.dev"
+				m.input.Reset()
+			} else if len(inputValue) >= 3 && inputValue[:3] == "qr " {
+				m.text = "Generating QR code for: " + inputValue[3:]
+				qrterminal.Generate(inputValue[3:], qrterminal.L, os.Stdout)
+				// Generate QR code to a string buffer instead of stdout
+				var qrBuffer strings.Builder
+				qrterminal.Generate(inputValue[3:], qrterminal.L, &qrBuffer)
+				m.text = "QR code for: " + inputValue[3:] + "\n\n" + qrBuffer.String()
+				m.input.Reset()
+			} else if inputValue == "coinflip" {
+				var num float64 = rand.Float64()
+				if num < 0.5 {
+					m.text += " Result: Heads"
+				} else {
+					m.text += " Result: Tails"
+				}
+				m.input.Reset()
+			} else if len(inputValue) >= 5 && inputValue[:5] == "yoda " {
+				text := inputValue[5:]
+				words := strings.Fields(text)
+				var yodaText string
+
+				if len(words) < 2 {
+					yodaText = text + ", mmm."
+				} else {
+					// Simple Yoda transformation: move some words around and add Yoda-isms
+					var result []string
+
+					// If sentence starts with "I am", change to "Am I"
+					if len(words) >= 2 && strings.ToLower(words[0]) == "i" && strings.ToLower(words[1]) == "am" {
+						result = append(result, strings.Title(words[1]), strings.ToLower(words[0]))
+						result = append(result, words[2:]...)
+					} else if len(words) >= 3 {
+						// Move last word or phrase to beginning
+						result = append(result, words[len(words)-1])
+						result = append(result, words[:len(words)-1]...)
+					} else {
+						result = words
+					}
+
+					// Add Yoda-isms
+					yodaisms := []string{", mmm.", ", yes.", ", hmm.", ", indeed."}
+					ending := yodaisms[rand.Intn(len(yodaisms))]
+
+					yodaText = strings.Join(result, " ") + ending
+				}
+				m.text = "Yoda says: " + yodaText
 				m.input.Reset()
 			} else {
 				m.text += " is not a valid command, try running help for commands"

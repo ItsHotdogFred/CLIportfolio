@@ -89,7 +89,7 @@ type model struct {
 }
 
 const (
-	host = "localhost"
+	host = ""
 	port = "234"
 )
 
