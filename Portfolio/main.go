@@ -30,19 +30,21 @@ import (
 )
 
 type model struct {
-	input        textinput.Model
-	viewport     viewport.Model
-	ready        bool
-	startingpath string
-	directory    string
-	text         string
-	history      []string
-	historyIndex int // -1 means not browsing history
-	clihistory   []string
-	fileViewMode bool           // true if viewing a file
-	fileViewport viewport.Model // dedicated viewport for file viewing
-	fileContent  string         // content of the file being viewed
-	tabmode      bool           // true if in tab mode
+	input               textinput.Model
+	viewport            viewport.Model
+	ready               bool
+	startingpath        string
+	directory           string
+	text                string
+	history             []string
+	historyIndex        int // -1 means not browsing history
+	clihistory          []string
+	fileViewMode        bool           // true if viewing a file
+	fileViewport        viewport.Model // dedicated viewport for file viewing
+	fileContent         string         // content of the file being viewed
+	commandautocomplete []string
+	fileautocomplete    []string
+	autocompletelist    []string
 }
 
 var headerstyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -52,7 +54,7 @@ const (
 	port = "2222"
 )
 
-const isServer = true // Set to true to enable the server, false to disable it
+const isServer = false // Set to true to enable the server, false to disable it
 
 func startServer() {
 	s, err := wish.NewServer(
@@ -100,13 +102,14 @@ func initialModel() model {
 	ti.Width = 60
 	vp := viewport.New(0, 0)
 	return model{
-		input:        ti,
-		viewport:     vp,
-		startingpath: ".",
-		directory:    ".",
-		text:         "nothing yet...",
-		historyIndex: -1,
-		clihistory:   []string{headerView(), "Welcome to Fred's Portfolio CLI!\n\nNavigation:\n• Use scroll wheel or arrow keys (when tab mode is active)\n• Press 'tab' to toggle viewport/history navigation mode\n• Type 'help' to see all available commands\n\nGet started with 'ls' to explore or 'help' for guidance."},
+		input:               ti,
+		viewport:            vp,
+		startingpath:        ".",
+		directory:           ".",
+		text:                "nothing yet...",
+		historyIndex:        -1,
+		clihistory:          []string{headerView(), "Welcome to Fred's Portfolio CLI!\n\nNavigation:\n• Use scroll wheel or arrow keys to browse command history\n• Use Page Up/Page Down to navigate viewport\n• Type 'help' to see all available commands\n\nGet started with 'ls' to explore or 'help' for guidance."},
+		commandautocomplete: []string{"help", "ls", "pwd", "cd", "cat", "whoami", "date", "version", "neofetch", "skills", "contact", "qr", "coinflip", "echo", "joke", "wiki", "clear", "exit", "yoda"},
 	}
 }
 
@@ -150,10 +153,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.WindowSizeMsg:
 			headerHeight := lipgloss.Height(m.fileHeaderView())
 			footerHeight := lipgloss.Height(m.fileFooterView())
-			verticalMarginHeight := headerHeight + footerHeight
+			exitInstructionHeight := 1 // For the "(Press 'q' or 'esc' to exit)" line
+			verticalMarginHeight := headerHeight + footerHeight + exitInstructionHeight
 			m.fileViewport.Width = msg.Width
 			m.fileViewport.Height = msg.Height - verticalMarginHeight
-			m.fileViewport.YPosition = headerHeight
+			m.fileViewport.YPosition = 0
 		}
 		var fileCmd tea.Cmd
 		m.fileViewport, fileCmd = m.fileViewport.Update(msg)
@@ -207,10 +211,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s += fmt.Sprintf("Error reading directory: %v\n", err)
 				}
 				s += "\nName\n------\n"
+				
+				// Define styles for folders and files
+				folderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#90EE90")) // Pastel green
+				fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#DDA0DD"))   // Pastel purple
+				
 				for _, entry := range entries {
 					// Skip hidden files/folders (those starting with .)
 					if !strings.HasPrefix(entry.Name(), ".") {
-						s += fmt.Sprintf("%s\n", entry.Name())
+						if entry.IsDir() {
+							s += folderStyle.Render("📁 " + entry.Name()) + "\n"
+						} else {
+							s += fileStyle.Render("📄 " + entry.Name()) + "\n"
+						}
 					}
 				}
 				m.text = s
@@ -247,6 +260,7 @@ Utilities:
 
 Navigation Tips:
   - Use up/down arrows to browse command history
+  - Use Page Up/Page Down to navigate viewport
   - Press 'q' or 'esc' to exit file viewer
   - Use 'cd ..' to go to parent directory
 
@@ -277,9 +291,10 @@ Examples:
 				}
 				m.fileContent = string(content)
 				m.fileViewMode = true
-				m.fileViewport = viewport.New(80, 24)
+				// Initialize with proper size that will be updated by WindowSizeMsg
+				m.fileViewport = viewport.New(80, 20)
 				m.fileViewport.SetContent(m.fileContent)
-				m.fileViewport.YPosition = lipgloss.Height(m.fileHeaderView())
+				m.fileViewport.YPosition = 0
 				m.input.Reset()
 			} else if inputValue == "joke" {
 				m.input.Reset()
@@ -362,7 +377,7 @@ Examples:
 	   .8888.`+"`"+`     :`+"`"+`     `+"`"+`::`+"`"+`88:88888  
 	  .8888        `+"`"+`         `+"`"+`.888:8888. 
 	 888:8         .           888:88888 
-   .888:88        .:           888:88888:
+   .888:88        .:           88:88888:
    8888888.       ::           88:888888 
    `+"`"+`.::.888.      ::          .88888888  
   .::::::.888.    ::         :::`+"`"+`8888`+"`"+`.  :
@@ -448,40 +463,129 @@ Skills:
 				m.clihistory = append(m.clihistory, m.text)
 			}
 
+		// Autocomplete handling
 		case "tab":
-			// Toggle tab mode
-			m.tabmode = !m.tabmode
+			if m.input.Value() == "" {
+				return m, nil // No input to autocomplete
+			}
 
-		// if Tab mode is enabled, arrow keys should move viewport
+			m.autocompletelist = []string{} // Reset autocompletion list
 
-		case "up", "ctrl+p":
-			if !m.tabmode {
-				if len(m.history) > 0 {
-					if m.historyIndex == -1 {
-						m.historyIndex = 0
-					} else if m.historyIndex < len(m.history)-1 {
-						m.historyIndex++
-					}
-					m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
+			entries, _ := os.ReadDir(m.directory)
+			m.fileautocomplete = []string{}
+			for _, entry := range entries {
+				if !strings.HasPrefix(entry.Name(), ".") {
+					m.fileautocomplete = append(m.fileautocomplete, entry.Name())
 				}
+			}
+
+			// Perform autocompletion logic here
+			// For example, you could suggest commands based on the current input
+			m.autocompletelist = append(m.commandautocomplete, m.fileautocomplete...)
+			input := m.input.Value()
+
+			// Split input into words to get the current word being typed
+			words := strings.Fields(input)
+			if len(words) == 0 {
 				return m, nil
 			}
-		case "down", "ctrl+n":
-			// Only allow input history navigation, do not move viewport
-			if !m.tabmode {
-				if len(m.history) > 0 {
-					if m.historyIndex > 0 {
-						m.historyIndex--
+
+			currentWord := words[len(words)-1]
+			var bestMatch string
+
+			for _, option := range m.autocompletelist {
+				// Check if option starts with the current word (prefix match)
+				if strings.HasPrefix(strings.ToLower(option), strings.ToLower(currentWord)) {
+					if bestMatch == "" {
+						bestMatch = option
+					} else {
+						// If we have multiple matches, prefer files over commands
+						// and among files, prefer the shortest complete filename
+						isCurrentFile := false
+						isBestFile := false
+
+						// Check if current option is a file (contains extension)
+						for _, fileOption := range m.fileautocomplete {
+							if option == fileOption {
+								isCurrentFile = true
+								break
+							}
+						}
+
+						// Check if best match is a file
+						for _, fileOption := range m.fileautocomplete {
+							if bestMatch == fileOption {
+								isBestFile = true
+								break
+							}
+						}
+
+						// Prefer files over commands, and shorter files over longer files
+						if isCurrentFile && !isBestFile {
+							bestMatch = option
+						} else if isCurrentFile && isBestFile && len(option) < len(bestMatch) {
+							bestMatch = option
+						} else if !isCurrentFile && !isBestFile && len(option) < len(bestMatch) {
+							bestMatch = option
+						}
 					}
-					m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
+				}
+			}
+
+			// If we found a match, replace only the current word
+			if bestMatch != "" {
+				if len(words) == 1 {
+					// Only one word, replace entirely
+					m.input.SetValue(bestMatch)
+				} else {
+					// Multiple words, replace only the last word
+					words[len(words)-1] = bestMatch
+					m.input.SetValue(strings.Join(words, " "))
+				}
+				// Position cursor at the end of the input
+				m.input.CursorEnd()
+			}
+
+			return m, nil
+
+		case "up", "ctrl+p":
+			// Navigate command history upward
+			if len(m.history) > 0 {
+				if m.historyIndex == -1 {
+					m.historyIndex = 0
+				} else if m.historyIndex < len(m.history)-1 {
+					m.historyIndex++
+				}
+				m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
+			}
+			return m, nil
+
+		case "down", "ctrl+n":
+			// Navigate command history downward
+			if len(m.history) > 0 {
+				if m.historyIndex > 0 {
+					m.historyIndex--
 				} else if m.historyIndex == 0 {
 					m.historyIndex = -1
 					m.input.SetValue("")
 				}
-				return m, nil
+				if m.historyIndex >= 0 {
+					m.input.SetValue(m.history[len(m.history)-1-m.historyIndex])
+				}
 			}
+			return m, nil
 
+		case "pageup":
+			// Page up for viewport
+			m.viewport.LineUp(m.viewport.Height / 2)
+			return m, nil
+
+		case "pagedown":
+			// Page down for viewport
+			m.viewport.LineDown(m.viewport.Height / 2)
+			return m, nil
 		}
+
 	case tea.WindowSizeMsg:
 		// The prompt line acts as the footer for the main view.
 		// We account for the prompt line itself plus a newline.
@@ -516,7 +620,7 @@ Skills:
 	// First check if it's a key message that should not move the viewport
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
-		case "ctrl+p", "ctrl+n", "u", "k", "b", "d", "f", "j":
+		case "ctrl+p", "ctrl+n", "u", "k", "b", "d", "f", "j", "pageup", "pagedown":
 			// Don't update viewport for these keys, only update input
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
