@@ -211,18 +211,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					s += fmt.Sprintf("Error reading directory: %v\n", err)
 				}
 				s += "\nName\n------\n"
-				
+
 				// Define styles for folders and files
 				folderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#90EE90")) // Pastel green
 				fileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#DDA0DD"))   // Pastel purple
-				
+
 				for _, entry := range entries {
 					// Skip hidden files/folders (those starting with .)
 					if !strings.HasPrefix(entry.Name(), ".") {
 						if entry.IsDir() {
-							s += folderStyle.Render("📁 " + entry.Name()) + "\n"
+							s += folderStyle.Render("📁 "+entry.Name()) + "\n"
 						} else {
-							s += fileStyle.Render("📄 " + entry.Name()) + "\n"
+							s += fileStyle.Render("📄 "+entry.Name()) + "\n"
 						}
 					}
 				}

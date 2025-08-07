@@ -1,0 +1,16 @@
+░██████╗░░█████╗░██████╗░░█████╗░████████╗
+██╔════╝░██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝
+██║░░██╗░██║░░██║██║░░██║██║░░██║░░░██║░░░
+██║░░╚██╗██║░░██║██║░░██║██║░░██║░░░██║░░░
+╚██████╔╝╚█████╔╝██████╔╝╚█████╔╝░░░██║░░░
+░╚═════╝░░╚════╝░╚═════╝░░╚════╝░░░░╚═╝░░░
+
+My Skills:
+- Godot (guh - dow) Game Developer
+- Gdscript (Godots Built in Language)
+- HTML, CSS, Bit of JS & TS
+- Tailwind CSS
+- Level 2 Svelte user
+- LLMs
+- Procrastinating 
+- Golang (Currently learning and using to create cli tools)

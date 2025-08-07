@@ -1,0 +1,4 @@
+Hello! I'm a passionate developer who likes to create games 
+using gdscript inside the Godot Game engine.
+I like to build custom systems which make my life easier. 
+I've only released a few games that I've made which are on itch.io. 
