@@ -292,7 +292,16 @@ Examples:
 				m.fileContent = string(content)
 				m.fileViewMode = true
 				// Initialize with proper size that will be updated by WindowSizeMsg
-				m.fileViewport = viewport.New(80, 20)
+				// Get current terminal size for file viewport
+				if m.ready {
+					headerHeight := lipgloss.Height(m.fileHeaderView())
+					footerHeight := lipgloss.Height(m.fileFooterView())
+					exitInstructionHeight := 1
+					verticalMarginHeight := headerHeight + footerHeight + exitInstructionHeight
+					m.fileViewport = viewport.New(m.viewport.Width, m.viewport.Height+2-verticalMarginHeight) // +2 to account for prompt height difference
+				} else {
+					m.fileViewport = viewport.New(80, 24) // Fallback dimensions
+				}
 				m.fileViewport.SetContent(m.fileContent)
 				m.fileViewport.YPosition = 0
 				m.input.Reset()
