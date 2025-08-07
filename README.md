@@ -1,5 +1,9 @@
 # 🚀 CLI Portfolio
 
+To access the demo you can go to either
+- ssh -p 1111 terminal.itsfred.dev | For Fred CLI aka my portfolio
+- ssh -p 2222 terminal.itsfred.dev | For cli based wikipedia
+
 An interactive command-line portfolio application built with Go, featuring a Wikipedia CLI tool and personal portfolio interface accessible via SSH.
 
 ## 📋 Features
