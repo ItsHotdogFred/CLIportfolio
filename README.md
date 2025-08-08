@@ -97,7 +97,7 @@ ssh localhost -p 234
 I'm a passionate developer who loves creating games using GDScript in the Godot Game Engine. I enjoy building custom systems that make life easier and have released several games on itch.io.
 
 ### 🎯 Current Projects
-- **Repulsus Insania**: A Celeste-inspired platformer for Hackclub Jumpstart
+- **CLI Website**: The web version of this but with image support. Check it out at [ItsFred](itsfred.dev)
 - **Pixelator**: My first released game - a challenging pixel art adventure
 
 ### 🎨 Games Portfolio
