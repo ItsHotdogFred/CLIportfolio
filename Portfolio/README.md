@@ -1,5 +1,9 @@
 # 🚀 CLI Portfolio
 
+To access the demo you can go to either
+- ssh -p 1111 terminal.itsfred.dev | For Fred CLI aka my portfolio
+- ssh -p 2222 terminal.itsfred.dev | For cli based wikipedia
+
 An interactive command-line portfolio application built with Go, featuring a Wikipedia CLI tool and personal portfolio interface accessible via SSH.
 
 ## 📋 Features
@@ -93,7 +97,7 @@ ssh localhost -p 234
 I'm a passionate developer who loves creating games using GDScript in the Godot Game Engine. I enjoy building custom systems that make life easier and have released several games on itch.io.
 
 ### 🎯 Current Projects
-- **Repulsus Insania**: A Celeste-inspired platformer for Hackclub Jumpstart
+- **CLI Website**: The web version of this but with image support. Check it out at [ItsFred](itsfred.dev)
 - **Pixelator**: My first released game - a challenging pixel art adventure
 
 ### 🎨 Games Portfolio
